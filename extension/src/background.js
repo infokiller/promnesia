@@ -18,13 +18,15 @@ const UUID = uuid()
 console.info('[promnesia]: running background page with UUID %s', UUID)
 
 
+type Action = chrome$browserAction | chrome$pageAction
 
-function actions(): Array<chrome$browserAction | chrome$pageAction> {
+
+function actions(): Array<Action> {
     // eh, on mobile neither pageAction nor browserAction have setIcon
     // but we can use pageAction to show at least some (default) icon in some circumstances
 
     // https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/Differences_between_desktop_and_Android#User_interface
-    const res = [chrome.browserAction]
+    const res: Array<Action> = [chrome.browserAction]
 
     // need to be defensive, it's only for mobile firefox
     if (chrome.pageAction) {
@@ -635,6 +637,8 @@ const onMessageCallback = async (msg: any) => { // TODO not sure if should defen
         await handleOpenSearch({
             utc_timestamp_s: utc_timestamp_s.toString()
         })
+    } else if (method == Methods.OPTIONS_UPDATED) {
+        updateContextMenus(msg.options)
     } else if (method == Methods.MARK_VISITED) {
         await defensify(handleToggleMarkVisited, 'handleToggleMarkVisited')()
     } else if (method == Methods.OPEN_SEARCH) {
@@ -904,7 +908,8 @@ const MENUS: Array<MenuEntry> = [
     },
 ]
 
-type MenuToggle = MenuEntry & {
+type MenuToggle = {
+    ...MenuEntry,
     checker: (opts: Options) => boolean,
 }
 
@@ -932,8 +937,91 @@ const TOGGLES: Array<MenuToggle> = [
     },
 ]
 
+function hasContextMenus(): boolean {
+    // need to be defensive since contextMenus API isn't available under mobile browser
+    if (browser.contextMenus == undefined) {
+        isMobile().then(mobile => {
+            if (!mobile) {
+                notifyError("error: chrome.contextMenus should be available")
+            }
+        })
+        return false
+    }
+    return true
+}
 
-function initBackground() {
+
+function initContextMenus(): void {
+    if (!hasContextMenus()) {
+        return
+    }
+
+    /*
+    Normally, you'd create context menu in chrome.runtime.onInstalled, since browser remembers context menu items in between installs.
+    see https://stackoverflow.com/a/19578984/706389
+    So if you create context menus outside of onInstalled, it would try to create same menus twice and cause error.
+    However then we can't change its states (checked/unchecked in this case) in response to changing options.
+    If we add the call to update context menu outside of onInstalled, then it might have a race condition on first init, 
+    and will fail to set checks on non yet existing menu itmes.
+    So seems the easiest to just remove all menus and init them again :shrug:
+    */
+    browser.contextMenus.removeAll().then(() => {
+        for (const {id: id, title: title, parentId: parentId, contexts: contexts} of MENUS) {
+            chrome.contextMenus.create({
+                id: id,
+                parentId: parentId,
+                title: title,
+                contexts: contexts || DEFAULT_CONTEXTS,
+            })
+        }
+
+        for (const {id: id, title: title, parentId: parentId, contexts: contexts} of TOGGLES) {
+            chrome.contextMenus.create({
+                id: id,
+                parentId: parentId,
+                title: title,
+                contexts: contexts || DEFAULT_CONTEXTS,
+                type: 'checkbox',
+            })
+        }
+        getOptions().then((opts) => updateContextMenus(opts))
+    })
+
+    // need to keep these callbacks here, since onInstalled above isn't called when background page resumes
+    const onMenuClickedCallback = defensify(async (info: MenuInfo, tab: chrome$Tab) => {
+        const mid = info.menuItemId
+        for (const m of [...MENUS, ...TOGGLES]) {
+            if (mid == m.id) {
+                const cb = m.callback
+                if (cb != null) {
+                    await cb(info, tab)
+                }
+                break
+            }
+        }
+    }, 'onMenuClicked')
+
+    // seems that it's best to keep onClicked listenere here (instead of inside removeAll)
+    // otherwise it's not working in firefox
+    // $FlowFixMe[incompatible-call] flow complains presumably because of defensify
+    browser.contextMenus.onClicked.addListener(onMenuClickedCallback)
+}
+
+
+function updateContextMenus(opts: Options): void {
+    if (!hasContextMenus()) {
+        return
+    }
+    for (const {id: id, checker: checker} of TOGGLES) {
+        chrome.contextMenus.update(
+            id,
+            {checked: checker(opts)},
+        )
+    }
+}
+
+
+function initBackground(): void {
     // NOTE: callback registering needs to be synchronous
     // otherwise doesn't work well with background page suspension
 
@@ -954,58 +1042,7 @@ function initBackground() {
         })
     }
 
-    // not sure why but context menus need to be created in onInstalled?
-    // https://stackoverflow.com/a/19578984/706389
-    chrome.runtime.onInstalled.addListener(() => {
-        // need to be defensive since contextMenus API isn't available under mobile browser
-        if (chrome.contextMenus == undefined) {
-            isMobile().then(mobile => {
-                if (!mobile) {
-                    notifyError("error: chrome.contextMenus should be available")
-                }
-            })
-            return
-        }
-        for (const {id: id, title: title, parentId: parentId, contexts: contexts} of MENUS) {
-            chrome.contextMenus.create({
-                id: id,
-                parentId: parentId,
-                title: title,
-                contexts: contexts || DEFAULT_CONTEXTS,
-            })
-        }
-        // TODO crap -- we need to refresh these menus when options update??
-        // it's broken in prod though so can live without it for a bit
-        // also cover with a test
-        getOptions().then((opts) => {
-            for (const {id: id, title: title, parentId: parentId, checker: checker, contexts: contexts} of TOGGLES) {
-                chrome.contextMenus.create({
-                    id: id,
-                    parentId: parentId,
-                    title: title,
-                    contexts: contexts || DEFAULT_CONTEXTS,
-                    type: 'checkbox',
-                    checked: checker(opts),
-                })
-            }
-        })
-
-        const onMenuClickedCallback = defensify(async (info: MenuInfo, tab: chrome$Tab) => {
-            const mid = info.menuItemId
-            for (const m of [...MENUS, ...TOGGLES]) {
-                if (mid == m.id) {
-                    const cb = m.callback
-                    if (cb != null) {
-                        await cb(info, tab)
-                    }
-                    break
-                }
-            }
-        }, 'onMenuClicked');
-
-        //  $FlowFixMe // err, complains at Promise but nevertheless works
-        chrome.contextMenus.onClicked.addListener(onMenuClickedCallback)
-    })
+    initContextMenus()
 }
 
 
@@ -1026,9 +1063,6 @@ initBackground()
 
 
 // for debugging
-/*
-browser.runtime.onSuspend.addListener(() => {
-    console.error("SUSPENDING BACKGROUND PAGE!!")
-    notifyError("SUSPENDING BACKGROUND!!")
-})
-*/
+// browser.runtime.onSuspend.addListener(() => {
+//     notifyError("SUSPENDING BACKGROUND!!")
+// })
