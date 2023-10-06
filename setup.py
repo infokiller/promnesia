@@ -52,18 +52,17 @@ def main() -> None:
 
                  'psutil',
 
-                 'requests<2.30.0',  # temporary, see https://github.com/psf/requests/issues/6443
+                 'requests',
                  'httpie',   # nicer http requests (replace with curl?)
                  'selenium', # browser automations
                  'click',    # confirmations for end2end test (might remove dependency)
 
                  'pyautogui', # for keyboard automation during end2end tests
-            ],
-            'linting': [
-                'pytest',
 
-                'mypy',
-                'lxml', # for coverage reports
+                 'ruff',
+
+                 'mypy',
+                 'lxml', # for coverage reports
             ],
             **{k[0]: v for k, v in DEPS_SOURCES.items()},
             'all': list(chain.from_iterable(DEPS_SOURCES.values())),
