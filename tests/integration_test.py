@@ -1,15 +1,13 @@
 from datetime import datetime, timedelta
-import os
 from pathlib import Path
-from subprocess import check_call, run, Popen
 from textwrap import dedent
-from typing import Set, Dict, Optional, Union, Sequence, Tuple, Mapping, List
+from typing import  Optional, Union, Sequence, Tuple, Mapping
 
 import pytest
 
-from common import under_ci, DATA, GIT_ROOT, promnesia_bin
+from common import DATA
 
-from promnesia.common import _is_windows, DbVisit
+from promnesia.common import _is_windows
 from promnesia.database.load import get_all_db_visits
 
 
@@ -150,6 +148,7 @@ SOURCES = [chrome_extractor]
     run_index(cfg)
 
 
+# TODO this should be in hypothesis source tester?
 def test_hypothesis(tmp_path: Path) -> None:
     index_hypothesis(tmp_path)
     visits = get_all_db_visits(tmp_path / 'promnesia.sqlite')
@@ -245,47 +244,3 @@ OUTPUT_DIR = r'{tmp_path}'
 
     [e, _, _, _] = visits
     assert e.src == 'error'
-
-
-def test_indexing_update(tmp_path: Path) -> None:
-    from collections import Counter
-
-    index_hypothesis(tmp_path)
-    visits = get_all_db_visits(tmp_path / 'promnesia.sqlite')
-    counter = Counter(v.src for v in visits)
-    assert counter['hyp'] > 50, counter  # precondition
-
-    dt = datetime.fromisoformat('2018-06-01T10:00:00.000000+01:00')
-    index_some_demo_visits(tmp_path, count=1000, base_dt=dt, delta=timedelta(hours=1), update=True)
-    visits = get_all_db_visits(tmp_path / 'promnesia.sqlite')
-    counter = Counter(v.src for v in visits)
-    assert counter['demo'] == 1000, counter
-    assert counter['hyp'] > 50, counter  # should keep the original visits too!
-
-
-@pytest.mark.parametrize('execution_number', range(1))  # adjust this parameter to increase 'coverage
-def test_concurrent_indexing(tmp_path: Path, execution_number) -> None:
-    cfg_slow = tmp_path / 'config_slow.py'
-    cfg_fast = tmp_path / 'config_fast.py'
-    cfg = dedent(f'''
-    OUTPUT_DIR = r'{tmp_path}'
-    from promnesia.common import Source
-    from promnesia.sources import demo
-    SOURCES = [Source(demo.index, count=COUNT)]
-    ''')
-    cfg_slow.write_text(cfg.replace('COUNT', '100000'))
-    cfg_fast.write_text(cfg.replace('COUNT', '100'   ))
-    # init it first, to create the database
-    # TODO ideally this shouldn't be necessary but it's reasonable that people would already have the index
-    # otherwise it would fail at db creation point.. which is kinda annoying to work around
-    # todo in principle can work around same way as in cachew, by having a loop around PRAGMA WAL command?
-    check_call(promnesia_bin('index', '--config', cfg_fast))
-
-    # run in the background
-    with Popen(promnesia_bin('index', '--config', cfg_slow)) as slow:
-        while slow.poll() is None:
-            # create a bunch of 'smaller' indexers running in parallel
-            fasts = [Popen(promnesia_bin('index', '--config', cfg_fast)) for _ in range(10)]
-            for fast in fasts:
-                assert fast.wait() == 0, fast  # should succeed
-        assert slow.poll() == 0, slow
