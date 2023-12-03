@@ -1,5 +1,4 @@
 from pathlib import Path
-import shutil
 import sqlite3
 from typing import Dict, Iterable, List, Optional, Set
 
@@ -23,7 +22,6 @@ from ..common import (
     Res,
     SourceName,
     get_logger,
-    get_tmpdir,
     now_tz,
 )
 from .common import get_columns, db_visit_to_row
@@ -46,6 +44,10 @@ SRC_ERROR = 'error'
 # this is tested by test_query_while_indexing
 def enable_wal(dbapi_con, con_record) -> None:
     dbapi_con.execute('PRAGMA journal_mode = WAL')
+
+
+def begin_immediate_transaction(conn):
+    conn.exec_driver_sql('BEGIN IMMEDIATE')
 
 
 Stats = Dict[Optional[SourceName], int]
@@ -116,19 +118,25 @@ def visits_to_sqlite(
     pengine.dispose()
     ###
 
-    tpath = Path(get_tmpdir().name) / 'promnesia.tmp.sqlite'
-    if overwrite_db:
-        # here we don't need timeout, since it's a brand new DB
-        engine = get_engine(f'sqlite:///{tpath}')
-    else:
-        # here we need a timeout, othewise concurrent indexing might not work
-        # (note that this also needs WAL mode)
-        # see test_concurrent_indexing
-        engine = get_engine(f'sqlite:///{db_path}', connect_args={'timeout': _CONNECTION_TIMEOUT_SECONDS})
+    # needtimeout, othewise concurrent indexing might not work
+    # (note that this also requires WAL mode)
+    engine = get_engine(f'sqlite:///{db_path}', connect_args={'timeout': _CONNECTION_TIMEOUT_SECONDS})
 
     cleared: Set[str] = set()
+
+    # by default, sqlalchemy does some sort of BEGIN (implicit) transaction, which doesn't provide proper isolation??
+    # see https://docs.sqlalchemy.org/en/20/dialects/sqlite.html#serializable-isolation-savepoints-transactional-ddl
+    event.listen(engine, 'begin', begin_immediate_transaction)
+    # TODO to allow more concurrent indexing, maybe could instead write to a temporary table?
+    # or collect visits first and only then start writing to the db to minimize db access window.. not sure
+
+    # engine.begin() starts a transaction
+    # so everything inside this block will be atomic to the outside observers
     with engine.begin() as conn:
         table.create(conn, checkfirst=True)
+
+        if overwrite_db:
+            conn.execute(table.delete())
 
         insert_stmt = table.insert()
         # using raw statement gives a massive speedup for inserting visits
@@ -148,19 +156,6 @@ def visits_to_sqlite(
 
         stats_after = query_total_stats(conn)
     engine.dispose()
-
-    if overwrite_db:
-        # remove all wal/shm files from the previous db
-        # otherwise we might end using new db with old wal
-        # FIXME this isn't great -- should just drop db via sql instead
-        db_files = sorted(db_path.parent.glob(db_path.name + '*'))
-        for db_file in db_files:
-            try:
-                # make defensive just in case
-                db_file.unlink()
-            except:
-                pass
-        shutil.move(str(tpath), str(db_path))
 
     stats_changes = {}
     # map str just in case some srcs are None
