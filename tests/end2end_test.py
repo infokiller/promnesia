@@ -31,15 +31,13 @@ from selenium.webdriver.support.ui import WebDriverWait as Wait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import NoAlertPresentException, NoSuchFrameException, TimeoutException
 
+from promnesia.tests.utils import index_urls
+from promnesia.tests.server_helper import run_server as wserver
+from promnesia.logging import LazyLogger
 
-from common import under_ci, uses_x, has_x, local_http_server, notnone
-from integration_test import index_hypothesis, index_local_chrome, index_urls
-from server_test import wserver
+from common import under_ci, has_x, local_http_server, notnone
 from browser_helper import open_extension_page, get_cmd_hotkey
 from webdriver_utils import frame_context, window_context, is_visible
-
-
-from promnesia.logging import LazyLogger
 
 
 logger = LazyLogger('promnesia-tests', level='debug')
@@ -830,6 +828,7 @@ def test_add_to_blacklist_context_menu(tmp_path: Path, browser: Browser) -> None
 # todo might be nice to run soft asserts for this test?
 @browsers()
 def test_visits(tmp_path: Path, driver: Driver) -> None:
+    from promnesia.tests.sources.test_hypothesis import index_hypothesis
     test_url = "http://www.e-flux.com/journal/53/59883/the-black-stack/"
     # test_url = "file:///usr/share/doc/python3/html/library/contextlib.html" # TODO ??
     with run_server(tmp_path=tmp_path, indexer=index_hypothesis, driver=driver) as helper:
@@ -864,6 +863,7 @@ def test_visits(tmp_path: Path, driver: Driver) -> None:
 
 @browsers()
 def test_search_around(tmp_path: Path, driver: Driver) -> None:
+    from promnesia.tests.sources.test_hypothesis import index_hypothesis
     # TODO hmm. dunno if we want to highlight only result with the same timestamp, or the results that are 'near'??
     ts = int(datetime.strptime("2017-05-22T10:59:12.082375+00:00", '%Y-%m-%dT%H:%M:%S.%f%z').timestamp())
     with run_server(tmp_path=tmp_path, indexer=index_hypothesis, driver=driver) as helper:
@@ -879,18 +879,6 @@ def test_search_around(tmp_path: Path, driver: Driver) -> None:
 
         manual.confirm('you should see search results, "anthrocidal" should be highlighted red')
         # FIXME test clicking search around in actual search page.. it didn't work, seemingly because of initBackground() handling??
-
-
-# TODO skip if not my hostname
-@uses_x
-@browsers()
-def test_chrome_visits(tmp_path: Path, browser: Browser) -> None:
-    pytest.skip('TODO hmm seems that this file is gone now? not sure if a good test anyway')
-    test_url = "https://en.wikipedia.org/wiki/Amplituhedron"
-    test_url = "https://en.wikipedia.org/wiki/Symplectic_vector_space"
-    with _test_helper(tmp_path, index_local_chrome, test_url, browser=browser) as helper:  # type: ignore
-        trigger_command(helper.driver, Command.ACTIVATE)
-        confirm("You shoud see chrome visits now; with time spent")
 
 
 @browsers()
@@ -983,6 +971,7 @@ def test_search_command(tmp_path: Path, driver: Driver) -> None:
     """
     Basic test that search command handler works and it opens search inteface
     """
+    from promnesia.tests.sources.test_hypothesis import index_hypothesis
     test_url = "https://en.wikipedia.org/wiki/Symplectic_vector_space"
     with run_server(tmp_path=tmp_path, indexer=index_hypothesis, driver=driver) as helper:
         driver.get(test_url)
@@ -995,6 +984,7 @@ def test_search_command(tmp_path: Path, driver: Driver) -> None:
 
 @browsers()
 def test_new_background_tab(tmp_path: Path, driver: Driver) -> None:
+    from promnesia.tests.sources.test_hypothesis import index_hypothesis
     start_url = "http://www.e-flux.com/journal/53/59883/the-black-stack/"
     # bg_url_text = "El Proceso (The Process)"
     # TODO generate some fake data instead?
